@@ -1,0 +1,492 @@
+name: Auto Build Apple TV Glass Launcher
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Complete Android TV Project
+        run: |
+          mkdir -p app/src/main/java/com/appletv/launcher
+          mkdir -p app/src/main/res/values
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "AetherTV"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.5.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.appletv.launcher'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.appletv.launcher'
+                  minSdk 23
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0.0'
+              }
+
+              buildTypes {
+                  debug {
+                      debuggable true
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.13.1'
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-feature android:name="android.software.leanback" android:required="false" />
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name"
+                  android:theme="@style/AppTheme"
+                  android:supportsRtl="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/strings.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Aether Glass TV</string>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+                  <item name="android:fontFamily">serif</item>
+                  <item name="android:windowBackground">#090E1E</item>
+                  <item name="android:statusBarColor">#090E1E</item>
+                  <item name="android:navigationBarColor">#090E1E</item>
+              </style>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/appletv/launcher/MainActivity.kt
+          package com.appletv.launcher
+
+          import android.app.Activity
+          import android.app.ActivityManager
+          import android.app.AlertDialog
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ResolveInfo
+          import android.graphics.BitmapFactory
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.BitmapDrawable
+          import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.os.Environment
+          import android.os.Handler
+          import android.os.Looper
+          import android.os.StatFs
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.WindowManager
+          import android.widget.Button
+          import android.widget.FrameLayout
+          import android.widget.GridLayout
+          import android.widget.ImageView
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+          import androidx.appcompat.app.AppCompatActivity
+          import java.io.File
+          import java.io.FileOutputStream
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import kotlin.math.roundToInt
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var root: FrameLayout
+              private lateinit var backgroundView: View
+              private lateinit var content: LinearLayout
+              private lateinit var statsText: TextView
+              private lateinit var clockText: TextView
+              private lateinit var appGrid: GridLayout
+
+              private val handler = Handler(Looper.getMainLooper())
+              private val prefs by lazy { getSharedPreferences("aether_prefs", Context.MODE_PRIVATE) }
+
+              private val wallpapers = listOf(
+                  intArrayOf(Color.rgb(8, 18, 42), Color.rgb(20, 58, 100), Color.rgb(60, 105, 155)),
+                  intArrayOf(Color.rgb(18, 10, 42), Color.rgb(68, 30, 105), Color.rgb(125, 65, 155)),
+                  intArrayOf(Color.rgb(55, 20, 32), Color.rgb(135, 55, 62), Color.rgb(205, 120, 80)),
+                  intArrayOf(Color.rgb(6, 30, 26), Color.rgb(18, 72, 60), Color.rgb(58, 108, 78))
+              )
+
+              private val wallpaperNames = arrayOf(
+                  "Ocean Glass (Apple Dark)",
+                  "Midnight Violet Glass",
+                  "Warm Sunset Glass",
+                  "Forest Night Glass",
+                  "Choose Custom Photo from TV Storage..."
+              )
+
+              private val ticker = object : Runnable {
+                  override fun run() {
+                      if (!isFinishing && !isDestroyed) {
+                          updateSystemStats()
+                          handler.postDelayed(this, 1000L)
+                      }
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  buildUI()
+                  loadApplications()
+                  handler.post(ticker)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  if (::appGrid.isInitialized) {
+                      loadApplications()
+                      updateSystemStats()
+                      applyWallpaper()
+                  }
+              }
+
+              override fun onDestroy() {
+                  handler.removeCallbacksAndMessages(null)
+                  super.onDestroy()
+              }
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
+
+              private fun glassDrawable(
+                  radiusDp: Int = 22,
+                  fillAlpha: Int = 45,
+                  strokeAlpha: Int = 85
+              ): GradientDrawable {
+                  return GradientDrawable().apply {
+                      cornerRadius = dp(radiusDp).toFloat()
+                      setColor(Color.argb(fillAlpha, 255, 255, 255))
+                      setStroke(dp(1), Color.argb(strokeAlpha, 255, 255, 255))
+                  }
+              }
+
+              private fun makeGlassButton(label: String, onClick: () -> Unit): Button {
+                  return Button(this).apply {
+                      text = label
+                      isAllCaps = false
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.create("serif", Typeface.BOLD)
+                      setPadding(dp(18), dp(10), dp(18), dp(10))
+                      background = glassDrawable(18, 45, 80)
+                      isFocusable = true
+
+                      setOnFocusChangeListener { _, hasFocus ->
+                          animate().scaleX(if (hasFocus) 1.08f else 1.0f)
+                              .scaleY(if (hasFocus) 1.08f else 1.0f)
+                              .setDuration(140).start()
+                          background = if (hasFocus) {
+                              glassDrawable(18, 110, 220)
+                          } else {
+                              glassDrawable(18, 45, 80)
+                          }
+                      }
+                      setOnClickListener { onClick() }
+                  }
+              }
+
+              private fun buildUI() {
+                  root = FrameLayout(this)
+
+                  backgroundView = View(this).apply {
+                      layoutParams = FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  }
+                  root.addView(backgroundView)
+
+                  val frostOverlay = View(this).apply {
+                      setBackgroundColor(Color.argb(55, 5, 10, 22))
+                  }
+                  root.addView(frostOverlay)
+
+                  val scroll = ScrollView(this).apply {
+                      isFillViewport = true
+                      clipToPadding = false
+                      setPadding(dp(36), dp(24), dp(36), dp(36))
+                      overScrollMode = View.OVER_SCROLL_NEVER
+                  }
+
+                  content = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                  }
+                  scroll.addView(content)
+                  root.addView(scroll)
+
+                  buildTopMonitorBar()
+                  buildHeroBanner()
+                  buildAppGridSection()
+
+                  setContentView(root)
+                  applyWallpaper()
+              }
+
+              private fun buildTopMonitorBar() {
+                  val topBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(dp(22), dp(14), dp(22), dp(14))
+                      background = glassDrawable(22, 55, 95)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = " AETHER TV"
+                      textSize = 22f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.create("serif", Typeface.BOLD)
+                      letterSpacing = 0.08f
+                  }
+
+                  statsText = TextView(this).apply {
+                      textSize = 13f
+                      setTextColor(Color.argb(235, 225, 240, 255))
+                      typeface = Typeface.create("serif", Typeface.NORMAL)
+                      gravity = Gravity.CENTER
+                      setPadding(dp(16), 0, dp(16), 0)
+                  }
+
+                  clockText = TextView(this).apply {
+                      textSize = 16f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.create("serif", Typeface.BOLD)
+                  }
+
+                  topBar.addView(title)
+                  topBar.addView(statsText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                  topBar.addView(clockText)
+
+                  content.addView(topBar, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      ViewGroup.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = dp(22) })
+              }
+
+              private fun buildHeroBanner() {
+                  val hero = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(26), dp(22), dp(26), dp(22))
+                      background = glassDrawable(26, 40, 90)
+                  }
+
+                  val heading = TextView(this).apply {
+                      text = "Apple TV Glass Edition"
+                      textSize = 28f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.create("serif", Typeface.BOLD)
+                  }
+
+                  val sub = TextView(this).apply {
+                      text = "Zero Ads • Zero Bloatware • Tip: Long-press OK on any app to Disable/Hide Bloatware"
+                      textSize = 14f
+                      setTextColor(Color.argb(210, 255, 255, 255))
+                      typeface = Typeface.create("serif", Typeface.ITALIC)
+                      setPadding(0, dp(4), 0, dp(16))
+                  }
+
+                  val btnRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                  }
+
+                  val wallpaperBtn = makeGlassButton("🎨 Change Wallpaper") {
+                      showWallpaperDialog()
+                  }
+
+                  val bloatwareBtn = makeGlassButton("🧹 Restore Hidden Apps") {
+                      prefs.edit().remove("hidden_apps").apply()
+                      loadApplications()
+                      Toast.makeText(this, "All hidden apps restored!", Toast.LENGTH_SHORT).show()
+                  }
+
+                  val settingsBtn = makeGlassButton("⚙ System Settings") {
+                      try {
+                          startActivity(Intent(Settings.ACTION_SETTINGS))
+                      } catch (e: Exception) {
+                          Toast.makeText(this, "Unable to open Settings", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  btnRow.addView(wallpaperBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(12) })
+                  btnRow.addView(bloatwareBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(12) })
+                  btnRow.addView(settingsBtn)
+
+                  hero.addView(heading)
+                  hero.addView(sub)
+                  hero.addView(btnRow)
+
+                  content.addView(hero, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      ViewGroup.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = dp(26) })
+              }
+
+              private fun buildAppGridSection() {
+                  val header = TextView(this).apply {
+                      text = "Installed Applications"
+                      textSize = 21f
+                      setTextColor(Color.WHITE)
+                      typeface = Typeface.create("serif", Typeface.BOLD)
+                  }
+                  content.addView(header, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      ViewGroup.LayoutParams.WRAP_CONTENT
+                  ).apply { bottomMargin = dp(14) })
+
+                  appGrid = GridLayout(this).apply {
+                      columnCount = 5
+                      alignmentMode = GridLayout.ALIGN_BOUNDS
+                  }
+                  content.addView(appGrid)
+              }
+
+              private fun loadApplications() {
+                  appGrid.removeAllViews()
+                  val pm = packageManager
+                  val hidden = prefs.getStringSet("hidden_apps", emptySet()) ?: emptySet()
+
+                  val leanbackIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                      addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+                  }
+                  val normalIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                      addCategory(Intent.CATEGORY_LAUNCHER)
+                  }
+
+                  val combined = LinkedHashMap<String, ResolveInfo>()
+                  for (info in pm.queryIntentActivities(leanbackIntent, 0)) {
+                      combined[info.activityInfo.packageName] = info
+                  }
+                  for (info in pm.queryIntentActivities(normalIntent, 0)) {
+                      val pkg = info.activityInfo.packageName
+                      if (!combined.containsKey(pkg)) combined[pkg] = info
+                  }
+
+                  val sortedApps = combined.values.sortedBy {
+                      it.loadLabel(pm).toString().lowercase(Locale.getDefault())
+                  }
+
+                  for (app in sortedApps) {
+                      val pkg = app.activityInfo.packageName
+                      if (pkg == packageName || hidden.contains(pkg)) continue
+
+                      val card = LinearLayout(this).apply {
+                          orientation = LinearLayout.VERTICAL
+                          gravity = Gravity.CENTER
+                          setPadding(dp(14), dp(16), dp(14), dp(14))
+                          background = glassDrawable(22, 42, 75)
+                          isFocusable = true
+                          isClickable = true
+                          isLongClickable = true
+
+                          setOnFocusChangeListener { _, hasFocus ->
+                              animate().scaleX(if (hasFocus) 1.12f else 1.0f)
+                                  .scaleY(if (hasFocus) 1.12f else 1.0f)
+                                  .setDuration(150).start()
+                              elevation = if (hasFocus) dp(12).toFloat() else 0f
+                              background = if (hasFocus) {
+                                  glassDrawable(22, 115, 230)
+                              } else {
+                                  glassDrawable(22, 42, 75)
+                              }
+                          }
+
+                          setOnClickListener {
+                              val launch = pm.getLeanbackLaunchIntentForPackage(pkg)
+                                  ?: pm.getLaunchIntentForPackage(pkg)
+                              if (launch != null) startActivity(launch)
+                          }
